@@ -65,11 +65,19 @@ class AutoTrader(BaseAutoTrader):
         prices are reported along with the volume available at each of those
         price levels.
         """
+
+        # Trading algorithm for Futures
         if instrument == Instrument.FUTURE:
+
+            # Integer, positive if the sum of sales volumes is greater than the sum of buying volumes.
+            # Tick size in cents represents smallest increment/decrement in price (??)
             price_adjustment = - (self.position // LOT_SIZE) * TICK_SIZE_IN_CENTS
+
             new_bid_price = bid_prices[0] + price_adjustment if bid_prices[0] != 0 else 0
             new_ask_price = ask_prices[0] + price_adjustment if ask_prices[0] != 0 else 0
 
+            # If we have a bid/ask and the new price is not the current price or 0 then cancel the order and reset
+            # the bid/ask id
             if self.bid_id != 0 and new_bid_price not in (self.bid_price, 0):
                 self.send_cancel_order(self.bid_id)
                 self.bid_id = 0
@@ -77,6 +85,8 @@ class AutoTrader(BaseAutoTrader):
                 self.send_cancel_order(self.ask_id)
                 self.ask_id = 0
 
+            # If we do not have a bid/ask and the new price is non zero and our position is within the corresponding
+            # position limit, then set create an order with the new price
             if self.bid_id == 0 and new_bid_price != 0 and self.position < POSITION_LIMIT:
                 self.bid_id = next(self.order_ids)
                 self.bid_price = new_bid_price
@@ -96,6 +106,8 @@ class AutoTrader(BaseAutoTrader):
         which may be better than the order's limit price. The volume is
         the number of lots filled at that price.
         """
+        # If order is a bid, increment the position by the volume, else if order is an ask, decrement the position by
+        # the volume
         if client_order_id in self.bids:
             self.position += volume
         elif client_order_id in self.asks:
@@ -112,6 +124,7 @@ class AutoTrader(BaseAutoTrader):
 
         If an order is cancelled its remaining volume will be zero.
         """
+        # If remaining volume is 0, set bid/ask id to 0
         if remaining_volume == 0:
             if client_order_id == self.bid_id:
                 self.bid_id = 0
