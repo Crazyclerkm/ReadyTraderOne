@@ -26,9 +26,14 @@ from ready_trader_one import BaseAutoTrader, Instrument, Lifespan, Side
 LOT_SIZE = 10
 POSITION_LIMIT = 1000
 TICK_SIZE_IN_CENTS = 100
-MAX_LOT_SIZE = 100
+MAX_LOT_SIZE = 25
 SHAPE_PARAMETER = -0.005
-WAIT_TIME = 5
+WAIT_TIME = 100
+S_VALUE = 3400 ## Midpoint???
+GAMMA = 0.1
+STD_DEV = 2  ## std dev of midpoint???
+T_FINAL = 360
+K_VALUE = 2
 
 
 class AutoTrader(BaseAutoTrader):
@@ -49,6 +54,7 @@ class AutoTrader(BaseAutoTrader):
         self.asks = set()
         self.ask_id = self.ask_price = self.bid_id = self.bid_price = self.position = 0
         self.no_orders = 0
+        self.current_time = self.bid_time = self.ask_time = 0
         self.ask_count = self.bid_count = -1
 
     def on_error_message(self, client_order_id: int, error_message: bytes) -> None:
@@ -74,27 +80,36 @@ class AutoTrader(BaseAutoTrader):
             ask_order = MAX_LOT_SIZE
             bid_order = MAX_LOT_SIZE * numpy.exp(-SHAPE_PARAMETER * self.position)
 
+        bid_order = round(bid_order)
+        ask_order = round(ask_order)
+        bid_order = min(bid_order, MAX_LOT_SIZE)
+        ask_order = min(ask_order, MAX_LOT_SIZE)
         return bid_order, ask_order
 
     def bid_ask_quote(self) -> (int, int):
-        return 0,0
+        indifference = self.indifference_price()
+        spread = self.spread()
+        print("Indifference: " + str(indifference) + " spread: " + str(spread))
+        return round(indifference - spread) * TICK_SIZE_IN_CENTS, round(indifference + spread) * TICK_SIZE_IN_CENTS
 
-    def order_policy(self):
-        if self.no_orders == 0:
-            self.bid_price, self.ask_price = self.bid_ask_quote()
-        elif self.no_orders == 1:
-            if self.bid_id != 0:
-                if (self.current_time - self.bid_time) > WAIT_TIME:
-                    self.send_cancel_order(self.bid_id)
-                    self.bid_price, self.ask_price = self.bid_ask_quote()
-            elif self.ask_id != 0:
-                if (self.current_time - self.ask_time) > WAIT_TIME:
-                    self.send_cancel_order(self.ask_id)
-                    self.bid_price, self.ask_price = self.bid_ask_quote()
-        elif self.no_orders == 2:
-            if(self.current_time - self.bid_time) > WAIT_TIME:
-                self.send_cancel_order(self.bid_id)
-                self.send_cancel_order(self.ask_id)
+    def cancel_order(self, bid_order: bool):
+        if bid_order:
+            self.send_cancel_order(self.bid_id)
+            self.bid_time = 0
+            self.bid_id = 0
+        else:
+            self.send_cancel_order(self.ask_id)
+            self.ask_time = 0
+            self.ask_id = 0
+        self.no_orders -= 1
+
+    # def order_policy(self):
+
+    def indifference_price(self):
+        return S_VALUE - self.position * GAMMA * STD_DEV * STD_DEV * (T_FINAL - self.current_time)
+
+    def spread(self):
+        return GAMMA * STD_DEV * STD_DEV * (T_FINAL - self.current_time) + numpy.log(1 + (GAMMA / K_VALUE))
 
     def on_order_book_update_message(self, instrument: int, sequence_number: int, ask_prices: List[int],
                                      ask_volumes: List[int], bid_prices: List[int], bid_volumes: List[int]) -> None:
@@ -105,38 +120,87 @@ class AutoTrader(BaseAutoTrader):
         prices are reported along with the volume available at each of those
         price levels.
         """
+
         bid_volume, ask_volume = self.order_size()
-        if instrument == Instrument.FUTURE:
+        print("no orders: " + str(self.no_orders) + " bid id: " + str(self.bid_id) + " ask id: " + str(self.ask_id))
+        print("current time: " + str(self.current_time) + " ask time: " + str(self.ask_time))
+        if self.no_orders == 0:
+            self.bid_price, self.ask_price = self.bid_ask_quote()
+            self.bid_id = next(self.order_ids)
+            self.ask_id = next(self.order_ids)
+            self.send_insert_order(self.bid_id, Side.BUY, self.bid_price, bid_volume, Lifespan.GOOD_FOR_DAY)
+            self.send_insert_order(self.ask_id, Side.ASK, self.ask_price, ask_volume, Lifespan.GOOD_FOR_DAY)
+            self.no_orders += 2
+        elif self.no_orders == 1:
+            if self.bid_id != 0:
+                if (self.current_time - self.bid_time) > WAIT_TIME:
+                    self.cancel_order(True)
+                    self.bid_price, self.ask_price = self.bid_ask_quote()
+                    self.bid_id = next(self.order_ids)
+                    self.ask_id = next(self.order_ids)
+                    self.send_insert_order(self.bid_id, Side.BUY, self.bid_price, bid_volume, Lifespan.GOOD_FOR_DAY)
+                    self.send_insert_order(self.ask_id, Side.ASK, self.ask_price, ask_volume, Lifespan.GOOD_FOR_DAY)
+                    self.no_orders += 2
+
+            elif self.ask_id != 0:
+                if (self.current_time - self.ask_time) > WAIT_TIME:
+                    self.cancel_order(False)
+                    self.bid_price, self.ask_price = self.bid_ask_quote()
+                    self.bid_id = next(self.order_ids)
+                    self.ask_id = next(self.order_ids)
+                    self.send_insert_order(self.bid_id, Side.BUY, self.bid_price, bid_volume, Lifespan.GOOD_FOR_DAY)
+                    self.send_insert_order(self.ask_id, Side.ASK, self.ask_price, ask_volume, Lifespan.GOOD_FOR_DAY)
+                    self.no_orders += 2
+        elif self.no_orders == 2:
+            if (self.current_time - self.bid_time) > WAIT_TIME:
+                self.cancel_order(True)
+                self.cancel_order(False)
+                self.bid_price, self.ask_price = self.bid_ask_quote()
+                self.bid_id = next(self.order_ids)
+                self.ask_id = next(self.order_ids)
+                self.send_insert_order(self.bid_id, Side.BUY, self.bid_price, bid_volume, Lifespan.GOOD_FOR_DAY)
+                self.send_insert_order(self.ask_id, Side.ASK, self.ask_price, ask_volume, Lifespan.GOOD_FOR_DAY)
+                self.no_orders += 2
+
+        # if instrument == Instrument.ETF:
 
             # Integer, positive if the sum of sales volumes is greater than the sum of buying volumes.
             # Tick size in cents represents smallest increment/decrement in price (??)
-            price_adjustment = - (self.position // LOT_SIZE) * TICK_SIZE_IN_CENTS
+            # price_adjustment = - (self.position // LOT_SIZE) * TICK_SIZE_IN_CENTS
 
-            new_bid_price = bid_prices[0] + price_adjustment if bid_prices[0] != 0 else 0
-            new_ask_price = ask_prices[0] + price_adjustment if ask_prices[0] != 0 else 0
+            #new_bid_price = bid_prices[0] + price_adjustment if bid_prices[0] != 0 else 0
+            #new_ask_price = ask_prices[0] + price_adjustment if ask_prices[0] != 0 else 0
+
+            # new_bid_price = self.indifference_price() - self.spread()
+            # new_ask_price = self.indifference_price() + self.spread()
 
             # If we have a bid/ask and the new price is not the current price or 0 then cancel the order and reset
             # the bid/ask id
-            if self.bid_id != 0 and new_bid_price not in (self.bid_price, 0):
-                self.send_cancel_order(self.bid_id)
-                self.bid_id = 0
-            if self.ask_id != 0 and new_ask_price not in (self.ask_price, 0):
-                self.send_cancel_order(self.ask_id)
-                self.ask_id = 0
+            # if self.bid_id != 0 and new_bid_price not in (self.bid_price, 0):
+            #     self.cancel_order(True)
+            # if self.ask_id != 0 and new_ask_price not in (self.ask_price, 0):
+            #     self.cancel_order(False)
+            #
+            # # If we do not have a bid/ask and the new price is non zero and our position is within the corresponding
+            # # position limit, then set create an order with the new price
+            # if self.bid_id == 0 and new_bid_price != 0 and self.position < POSITION_LIMIT:
+            #     self.bid_id = next(self.order_ids)
+            #     self.bid_price = new_bid_price
+            #     self.send_insert_order(self.bid_id, Side.BUY, new_bid_price, bid_volume, Lifespan.GOOD_FOR_DAY)
+            #     self.bids.add(self.bid_id)
+            #
+            # if self.ask_id == 0 and new_ask_price != 0 and self.position > -POSITION_LIMIT:
+            #     self.ask_id = next(self.order_ids)
+            #     self.ask_price = new_ask_price
+            #     print("ask id: " + str(self.ask_id) + " Side: " + str(Side.SELL) + " New ask price: " + str(
+            #         new_ask_price) + " ask_volume: " + str(ask_volume))
+            #     self.send_insert_order(self.ask_id, Side.SELL, new_ask_price, ask_volume, Lifespan.GOOD_FOR_DAY)
+            #     self.asks.add(self.ask_id)
 
-            # If we do not have a bid/ask and the new price is non zero and our position is within the corresponding
-            # position limit, then set create an order with the new price
-            if self.bid_id == 0 and new_bid_price != 0 and self.position < POSITION_LIMIT:
-                self.bid_id = next(self.order_ids)
-                self.bid_price = new_bid_price
-                self.send_insert_order(self.bid_id, Side.BUY, new_bid_price, bid_volume, Lifespan.GOOD_FOR_DAY)
-                self.bids.add(self.bid_id)
+        # Update time
+        self.current_time += 1
 
-            if self.ask_id == 0 and new_ask_price != 0 and self.position > -POSITION_LIMIT:
-                self.ask_id = next(self.order_ids)
-                self.ask_price = new_ask_price
-                self.send_insert_order(self.ask_id, Side.SELL, new_ask_price, ask_volume, Lifespan.GOOD_FOR_DAY)
-                self.asks.add(self.ask_id)
+
 
     def on_order_filled_message(self, client_order_id: int, price: int, volume: int) -> None:
         """Called when when of your orders is filled, partially or fully.
@@ -176,8 +240,10 @@ class AutoTrader(BaseAutoTrader):
         if remaining_volume == 0:
             if client_order_id == self.bid_id:
                 self.bid_id = 0
+                self.no_orders -= 1
             elif client_order_id == self.ask_id:
                 self.ask_id = 0
+                self.no_orders -= 1
 
             # It could be either a bid or an ask
             self.bids.discard(client_order_id)
