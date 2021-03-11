@@ -29,6 +29,7 @@ TICK_SIZE_IN_CENTS = 100
 MAX_LOT_SIZE = 25
 SHAPE_PARAMETER = -0.005
 WAIT_TIME = 100
+S_VALUE_LIST = []
 S_VALUE = 3400 ## Midpoint???
 GAMMA = 0.1
 STD_DEV = 2  ## std dev of midpoint???
@@ -120,6 +121,33 @@ class AutoTrader(BaseAutoTrader):
         prices are reported along with the volume available at each of those
         price levels.
         """
+        bid_num = 0
+        bid_sum = 0
+        for bid in bid_prices:
+            if bid != 0:
+                bid_sum = bid_sum + bid
+                bid_num += 1
+
+        ask_num = 0
+        ask_sum = 0
+        for ask in ask_prices:
+            if ask != 0:
+                ask_sum = ask_sum + ask
+                ask_num += 1
+
+        current_midprice = (bid_sum + ask_sum) / (bid_num + ask_num)
+
+        if len(S_VALUE_LIST) < 11:
+            S_VALUE_LIST.append(current_midprice)
+        else:
+            del S_VALUE_LIST[0]
+            S_VALUE_LIST.append(current_midprice)
+
+        s_sum = 0
+        for s in S_VALUE_LIST:
+            s_sum = s_sum + s
+
+        S_VALUE = (s_sum/len(S_VALUE_LIST)) / TICK_SIZE_IN_CENTS
 
         bid_volume, ask_volume = self.order_size()
         print("no orders: " + str(self.no_orders) + " bid id: " + str(self.bid_id) + " ask id: " + str(self.ask_id))
