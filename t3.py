@@ -26,7 +26,7 @@ from ready_trader_one import BaseAutoTrader, Instrument, Lifespan, Side
 LOT_SIZE = 10
 POSITION_LIMIT = 1000
 TICK_SIZE_IN_CENTS = 100
-MAX_LOT_SIZE = 25
+MAX_LOT_SIZE = 5
 SHAPE_PARAMETER = -0.005
 WAIT_TIME = 10
 S_VALUE_LIST = []
@@ -102,10 +102,12 @@ class AutoTrader(BaseAutoTrader):
             self.bid_id = next(self.order_ids)
             self.send_insert_order(self.bid_id, Side.BUY, self.bid_price, volume, Lifespan.GOOD_FOR_DAY)
             self.bids.add(self.bid_id)
+            self.bid_time = self.current_time
         else:
             self.ask_id = next(self.order_ids)
             self.send_insert_order(self.ask_id, Side.ASK, self.ask_price, volume, Lifespan.GOOD_FOR_DAY)
             self.asks.add(self.ask_id)
+            self.ask_time = self.current_time
         self.no_orders += 1
 
     def cancel_order(self, bid_order: bool):
@@ -165,8 +167,10 @@ class AutoTrader(BaseAutoTrader):
             del self.s_value_list[0]
             self.s_value_list.append(current_midprice)
 
-        self.std_dev = numpy.std(self.s_value_list)
-        print(self.std_dev)
+        if len(self.s_value_list) != 0:
+            self.std_dev = numpy.std(self.s_value_list)
+
+        #print(self.std_dev)
         s_sum = 0
         for s in self.s_value_list:
             s_sum = s_sum + s
@@ -179,51 +183,41 @@ class AutoTrader(BaseAutoTrader):
         # print("current time: " + str(self.current_time) + " ask time: " + str(self.ask_time))
         if self.no_orders == 0:
             self.bid_price, self.ask_price = self.bid_ask_quote()
-            self.bid_id = next(self.order_ids)
-            self.ask_id = next(self.order_ids)
-            # print("bid id: " + str(self.bid_id) + " bid price: " + str(self.bid_price) + " bid volume: " + str(bid_volume))
-            self.send_insert_order(self.bid_id, Side.BUY, self.bid_price, bid_volume, Lifespan.GOOD_FOR_DAY)
-            self.send_insert_order(self.ask_id, Side.ASK, self.ask_price, ask_volume, Lifespan.GOOD_FOR_DAY)
-            self.bids.add(self.bid_id)
-            self.asks.add(self.ask_id)
-            self.no_orders += 2
+            if self.bid_price != self.ask_price:
+                self.insert_order(True, bid_volume)
+                self.insert_order(False, ask_volume)
+            # self.bid_id = next(self.order_ids)
+            # self.ask_id = next(self.order_ids)
+            # # print("bid id: " + str(self.bid_id) + " bid price: " + str(self.bid_price) + " bid volume: " + str(bid_volume))
+            # self.send_insert_order(self.bid_id, Side.BUY, self.bid_price, bid_volume, Lifespan.GOOD_FOR_DAY)
+            # self.send_insert_order(self.ask_id, Side.ASK, self.ask_price, ask_volume, Lifespan.GOOD_FOR_DAY)
+            # self.bids.add(self.bid_id)
+            # self.asks.add(self.ask_id)
+            # self.no_orders += 2
 
         elif self.no_orders == 1:
             if self.bid_id != 0:
                 if (self.current_time - self.bid_time) > WAIT_TIME:
                     self.cancel_order(True)
                     self.bid_price, self.ask_price = self.bid_ask_quote()
-                    self.bid_id = next(self.order_ids)
-                    self.ask_id = next(self.order_ids)
-                    self.send_insert_order(self.bid_id, Side.BUY, self.bid_price, bid_volume, Lifespan.GOOD_FOR_DAY)
-                    self.send_insert_order(self.ask_id, Side.ASK, self.ask_price, ask_volume, Lifespan.GOOD_FOR_DAY)
-                    self.bids.add(self.bid_id)
-                    self.asks.add(self.ask_id)
-                    self.no_orders += 2
-
+                    if self.bid_price != self.ask_price:
+                        self.insert_order(True, bid_volume)
+                        self.insert_order(False, ask_volume)
             elif self.ask_id != 0:
                 if (self.current_time - self.ask_time) > WAIT_TIME:
                     self.cancel_order(False)
                     self.bid_price, self.ask_price = self.bid_ask_quote()
-                    self.bid_id = next(self.order_ids)
-                    self.ask_id = next(self.order_ids)
-                    self.send_insert_order(self.bid_id, Side.BUY, self.bid_price, bid_volume, Lifespan.GOOD_FOR_DAY)
-                    self.send_insert_order(self.ask_id, Side.ASK, self.ask_price, ask_volume, Lifespan.GOOD_FOR_DAY)
-                    self.bids.add(self.bid_id)
-                    self.asks.add(self.ask_id)
-                    self.no_orders += 2
+                    if self.bid_price != self.ask_price:
+                        self.insert_order(True, bid_volume)
+                        self.insert_order(False, ask_volume)
         elif self.no_orders == 2:
             if (self.current_time - self.bid_time) > WAIT_TIME:
                 self.cancel_order(True)
                 self.cancel_order(False)
                 self.bid_price, self.ask_price = self.bid_ask_quote()
-                self.bid_id = next(self.order_ids)
-                self.ask_id = next(self.order_ids)
-                self.send_insert_order(self.bid_id, Side.BUY, self.bid_price, bid_volume, Lifespan.GOOD_FOR_DAY)
-                self.send_insert_order(self.ask_id, Side.ASK, self.ask_price, ask_volume, Lifespan.GOOD_FOR_DAY)
-                self.bids.add(self.bid_id)
-                self.asks.add(self.ask_id)
-                self.no_orders += 2
+                if self.bid_price != self.ask_price:
+                    self.insert_order(True, bid_volume)
+                    self.insert_order(False, ask_volume)
 
         # if instrument == Instrument.ETF:
 
