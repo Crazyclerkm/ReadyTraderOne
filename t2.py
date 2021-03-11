@@ -98,7 +98,6 @@ class AutoTrader(BaseAutoTrader):
 
             if bid_num != 0 and ask_num != 0:
                 midpoint = (bid_sum + ask_sum) // (bid_num + ask_num)
-                print(midpoint)
                 midpoint = (midpoint // TICK_SIZE_IN_CENTS) * TICK_SIZE_IN_CENTS
 
             price_adjustment = - (self.position // LOT_SIZE) * TICK_SIZE_IN_CENTS

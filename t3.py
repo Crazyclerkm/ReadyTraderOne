@@ -28,12 +28,12 @@ POSITION_LIMIT = 1000
 TICK_SIZE_IN_CENTS = 100
 MAX_LOT_SIZE = 25
 SHAPE_PARAMETER = -0.005
-WAIT_TIME = 100
+WAIT_TIME = 10
 S_VALUE_LIST = []
-S_VALUE = 3400 ## Midpoint???
+S_VALUE = 3400  ## Midpoint???
 GAMMA = 0.1
 STD_DEV = 2  ## std dev of midpoint???
-T_FINAL = 360
+T_FINAL = 3600
 K_VALUE = 2
 
 
@@ -57,6 +57,8 @@ class AutoTrader(BaseAutoTrader):
         self.no_orders = 0
         self.current_time = self.bid_time = self.ask_time = 0
         self.ask_count = self.bid_count = -1
+        self.s_value_list = []
+        self.s_value = 0
 
     def on_error_message(self, client_order_id: int, error_message: bytes) -> None:
         """Called when the exchange detects an error.
@@ -107,7 +109,8 @@ class AutoTrader(BaseAutoTrader):
     # def order_policy(self):
 
     def indifference_price(self):
-        return S_VALUE - self.position * GAMMA * STD_DEV * STD_DEV * (T_FINAL - self.current_time)
+        print("s value: " + str(self.s_value) + " position: " + str(self.position))
+        return self.s_value - self.position * GAMMA * STD_DEV * STD_DEV * (T_FINAL - self.current_time)
 
     def spread(self):
         return GAMMA * STD_DEV * STD_DEV * (T_FINAL - self.current_time) + numpy.log(1 + (GAMMA / K_VALUE))
@@ -134,31 +137,38 @@ class AutoTrader(BaseAutoTrader):
             if ask != 0:
                 ask_sum = ask_sum + ask
                 ask_num += 1
+        current_midprice = 0
 
-        current_midprice = (bid_sum + ask_sum) / (bid_num + ask_num)
+        if bid_num != 0 and ask_num != 0:
+            current_midprice = (bid_sum + ask_sum) / (bid_num + ask_num)
+            current_midprice = (current_midprice // TICK_SIZE_IN_CENTS)
 
-        if len(S_VALUE_LIST) < 11:
-            S_VALUE_LIST.append(current_midprice)
-        else:
-            del S_VALUE_LIST[0]
-            S_VALUE_LIST.append(current_midprice)
+        if len(self.s_value_list) < 11 and current_midprice != 0:
+            self.s_value_list.append(current_midprice)
+        elif current_midprice != 0:
+            del self.s_value_list[0]
+            self.s_value_list.append(current_midprice)
 
         s_sum = 0
-        for s in S_VALUE_LIST:
+        for s in self.s_value_list:
             s_sum = s_sum + s
+        #print("s sum: " + str(s_sum) + " length: " + str(len(self.s_value_list)))
+        if len(self.s_value_list) != 0:
+            self.s_value = (s_sum / len(self.s_value_list))
 
-        S_VALUE = (s_sum/len(S_VALUE_LIST)) / TICK_SIZE_IN_CENTS
 
         bid_volume, ask_volume = self.order_size()
-        print("no orders: " + str(self.no_orders) + " bid id: " + str(self.bid_id) + " ask id: " + str(self.ask_id))
-        print("current time: " + str(self.current_time) + " ask time: " + str(self.ask_time))
+        #print("no orders: " + str(self.no_orders) + " bid id: " + str(self.bid_id) + " ask id: " + str(self.ask_id))
+        #print("current time: " + str(self.current_time) + " ask time: " + str(self.ask_time))
         if self.no_orders == 0:
             self.bid_price, self.ask_price = self.bid_ask_quote()
             self.bid_id = next(self.order_ids)
             self.ask_id = next(self.order_ids)
+            print("bid id: " + str(self.bid_id) + " bid price: " + str(self.bid_price) + " bid volume: " + str(bid_volume))
             self.send_insert_order(self.bid_id, Side.BUY, self.bid_price, bid_volume, Lifespan.GOOD_FOR_DAY)
             self.send_insert_order(self.ask_id, Side.ASK, self.ask_price, ask_volume, Lifespan.GOOD_FOR_DAY)
             self.no_orders += 2
+
         elif self.no_orders == 1:
             if self.bid_id != 0:
                 if (self.current_time - self.bid_time) > WAIT_TIME:
@@ -192,43 +202,41 @@ class AutoTrader(BaseAutoTrader):
 
         # if instrument == Instrument.ETF:
 
-            # Integer, positive if the sum of sales volumes is greater than the sum of buying volumes.
-            # Tick size in cents represents smallest increment/decrement in price (??)
-            # price_adjustment = - (self.position // LOT_SIZE) * TICK_SIZE_IN_CENTS
+        # Integer, positive if the sum of sales volumes is greater than the sum of buying volumes.
+        # Tick size in cents represents smallest increment/decrement in price (??)
+        # price_adjustment = - (self.position // LOT_SIZE) * TICK_SIZE_IN_CENTS
 
-            #new_bid_price = bid_prices[0] + price_adjustment if bid_prices[0] != 0 else 0
-            #new_ask_price = ask_prices[0] + price_adjustment if ask_prices[0] != 0 else 0
+        # new_bid_price = bid_prices[0] + price_adjustment if bid_prices[0] != 0 else 0
+        # new_ask_price = ask_prices[0] + price_adjustment if ask_prices[0] != 0 else 0
 
-            # new_bid_price = self.indifference_price() - self.spread()
-            # new_ask_price = self.indifference_price() + self.spread()
+        # new_bid_price = self.indifference_price() - self.spread()
+        # new_ask_price = self.indifference_price() + self.spread()
 
-            # If we have a bid/ask and the new price is not the current price or 0 then cancel the order and reset
-            # the bid/ask id
-            # if self.bid_id != 0 and new_bid_price not in (self.bid_price, 0):
-            #     self.cancel_order(True)
-            # if self.ask_id != 0 and new_ask_price not in (self.ask_price, 0):
-            #     self.cancel_order(False)
-            #
-            # # If we do not have a bid/ask and the new price is non zero and our position is within the corresponding
-            # # position limit, then set create an order with the new price
-            # if self.bid_id == 0 and new_bid_price != 0 and self.position < POSITION_LIMIT:
-            #     self.bid_id = next(self.order_ids)
-            #     self.bid_price = new_bid_price
-            #     self.send_insert_order(self.bid_id, Side.BUY, new_bid_price, bid_volume, Lifespan.GOOD_FOR_DAY)
-            #     self.bids.add(self.bid_id)
-            #
-            # if self.ask_id == 0 and new_ask_price != 0 and self.position > -POSITION_LIMIT:
-            #     self.ask_id = next(self.order_ids)
-            #     self.ask_price = new_ask_price
-            #     print("ask id: " + str(self.ask_id) + " Side: " + str(Side.SELL) + " New ask price: " + str(
-            #         new_ask_price) + " ask_volume: " + str(ask_volume))
-            #     self.send_insert_order(self.ask_id, Side.SELL, new_ask_price, ask_volume, Lifespan.GOOD_FOR_DAY)
-            #     self.asks.add(self.ask_id)
+        # If we have a bid/ask and the new price is not the current price or 0 then cancel the order and reset
+        # the bid/ask id
+        # if self.bid_id != 0 and new_bid_price not in (self.bid_price, 0):
+        #     self.cancel_order(True)
+        # if self.ask_id != 0 and new_ask_price not in (self.ask_price, 0):
+        #     self.cancel_order(False)
+        #
+        # # If we do not have a bid/ask and the new price is non zero and our position is within the corresponding
+        # # position limit, then set create an order with the new price
+        # if self.bid_id == 0 and new_bid_price != 0 and self.position < POSITION_LIMIT:
+        #     self.bid_id = next(self.order_ids)
+        #     self.bid_price = new_bid_price
+        #     self.send_insert_order(self.bid_id, Side.BUY, new_bid_price, bid_volume, Lifespan.GOOD_FOR_DAY)
+        #     self.bids.add(self.bid_id)
+        #
+        # if self.ask_id == 0 and new_ask_price != 0 and self.position > -POSITION_LIMIT:
+        #     self.ask_id = next(self.order_ids)
+        #     self.ask_price = new_ask_price
+        #     print("ask id: " + str(self.ask_id) + " Side: " + str(Side.SELL) + " New ask price: " + str(
+        #         new_ask_price) + " ask_volume: " + str(ask_volume))
+        #     self.send_insert_order(self.ask_id, Side.SELL, new_ask_price, ask_volume, Lifespan.GOOD_FOR_DAY)
+        #     self.asks.add(self.ask_id)
 
         # Update time
         self.current_time += 1
-
-
 
     def on_order_filled_message(self, client_order_id: int, price: int, volume: int) -> None:
         """Called when when of your orders is filled, partially or fully.
