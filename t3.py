@@ -31,7 +31,7 @@ SHAPE_PARAMETER = -0.005
 WAIT_TIME = 10
 S_VALUE_LIST = []
 S_VALUE = 3400  ## Midpoint???
-GAMMA = 0.1
+GAMMA = 0.075
 STD_DEV = 2  ## std dev of midpoint???
 T_FINAL = 3600
 K_VALUE = 2
@@ -59,6 +59,7 @@ class AutoTrader(BaseAutoTrader):
         self.ask_count = self.bid_count = -1
         self.s_value_list = []
         self.s_value = 0
+        self.std_dev = 0
 
     def on_error_message(self, client_order_id: int, error_message: bytes) -> None:
         """Called when the exchange detects an error.
@@ -75,25 +76,37 @@ class AutoTrader(BaseAutoTrader):
 
         :return:
         """
+
         ask_order = bid_order = MAX_LOT_SIZE
-        if self.position < 0:
+        if 0 > self.position > -POSITION_LIMIT:
             bid_order = MAX_LOT_SIZE
             ask_order = MAX_LOT_SIZE * numpy.exp(-SHAPE_PARAMETER * self.position)
-        elif self.position > 0:
+        elif 0 < self.position < POSITION_LIMIT:
             ask_order = MAX_LOT_SIZE
             bid_order = MAX_LOT_SIZE * numpy.exp(-SHAPE_PARAMETER * self.position)
 
         bid_order = round(bid_order)
         ask_order = round(ask_order)
-        bid_order = min(bid_order, MAX_LOT_SIZE)
-        ask_order = min(ask_order, MAX_LOT_SIZE)
+        # bid_order = min(bid_order, MAX_LOT_SIZE)
+        # ask_order = min(ask_order, MAX_LOT_SIZE)
         return bid_order, ask_order
 
     def bid_ask_quote(self) -> (int, int):
         indifference = self.indifference_price()
         spread = self.spread()
-        print("Indifference: " + str(indifference) + " spread: " + str(spread))
+        print("Indifference: " + str(indifference) + " spread: " + str(spread) + " std dev: " + str(self.std_dev))
         return round(indifference - spread) * TICK_SIZE_IN_CENTS, round(indifference + spread) * TICK_SIZE_IN_CENTS
+
+    def insert_order(self, bid_order: bool, volume: int):
+        if bid_order:
+            self.bid_id = next(self.order_ids)
+            self.send_insert_order(self.bid_id, Side.BUY, self.bid_price, volume, Lifespan.GOOD_FOR_DAY)
+            self.bids.add(self.bid_id)
+        else:
+            self.ask_id = next(self.order_ids)
+            self.send_insert_order(self.ask_id, Side.ASK, self.ask_price, volume, Lifespan.GOOD_FOR_DAY)
+            self.asks.add(self.ask_id)
+        self.no_orders += 1
 
     def cancel_order(self, bid_order: bool):
         if bid_order:
@@ -109,11 +122,12 @@ class AutoTrader(BaseAutoTrader):
     # def order_policy(self):
 
     def indifference_price(self):
-        print("s value: " + str(self.s_value) + " position: " + str(self.position))
-        return self.s_value - self.position * GAMMA * STD_DEV * STD_DEV * (T_FINAL - self.current_time)
+        # print("s value: " + str(self.s_value) + " position: " + str(self.position))
+        return self.s_value - self.position * GAMMA * self.std_dev * self.std_dev * (1 - self.current_time * 0.005)
 
     def spread(self):
-        return GAMMA * STD_DEV * STD_DEV * (T_FINAL - self.current_time) + numpy.log(1 + (GAMMA / K_VALUE))
+        return GAMMA * self.std_dev * self.std_dev * (1 - self.current_time * 0.00003) + numpy.log(
+            1 + (GAMMA / K_VALUE))
 
     def on_order_book_update_message(self, instrument: int, sequence_number: int, ask_prices: List[int],
                                      ask_volumes: List[int], bid_prices: List[int], bid_volumes: List[int]) -> None:
@@ -124,49 +138,54 @@ class AutoTrader(BaseAutoTrader):
         prices are reported along with the volume available at each of those
         price levels.
         """
-        bid_num = 0
-        bid_sum = 0
-        for bid in bid_prices:
-            if bid != 0:
-                bid_sum = bid_sum + bid
-                bid_num += 1
+        # bid_num = 0
+        # bid_sum = 0
+        # for bid in bid_prices:
+        #     if bid != 0:
+        #         bid_sum = bid_sum + bid
+        #         bid_num += 1
+        #
+        # ask_num = 0
+        # ask_sum = 0
+        # for ask in ask_prices:
+        #     if ask != 0:
+        #         ask_sum = ask_sum + ask
+        #         ask_num += 1
+        # current_midprice = 0
+        #
+        # if bid_num != 0 and ask_num != 0:
+        #     current_midprice = (bid_sum + ask_sum) / (bid_num + ask_num)
+        #     current_midprice = (current_midprice // TICK_SIZE_IN_CENTS)
 
-        ask_num = 0
-        ask_sum = 0
-        for ask in ask_prices:
-            if ask != 0:
-                ask_sum = ask_sum + ask
-                ask_num += 1
-        current_midprice = 0
-
-        if bid_num != 0 and ask_num != 0:
-            current_midprice = (bid_sum + ask_sum) / (bid_num + ask_num)
-            current_midprice = (current_midprice // TICK_SIZE_IN_CENTS)
-
+        current_midprice = (bid_prices[0] + ask_prices[0]) / 2
+        current_midprice = (current_midprice // TICK_SIZE_IN_CENTS)
         if len(self.s_value_list) < 11 and current_midprice != 0:
             self.s_value_list.append(current_midprice)
         elif current_midprice != 0:
             del self.s_value_list[0]
             self.s_value_list.append(current_midprice)
 
+        self.std_dev = numpy.std(self.s_value_list)
+        print(self.std_dev)
         s_sum = 0
         for s in self.s_value_list:
             s_sum = s_sum + s
-        #print("s sum: " + str(s_sum) + " length: " + str(len(self.s_value_list)))
+        # print("s sum: " + str(s_sum) + " length: " + str(len(self.s_value_list)))
         if len(self.s_value_list) != 0:
             self.s_value = (s_sum / len(self.s_value_list))
 
-
         bid_volume, ask_volume = self.order_size()
-        #print("no orders: " + str(self.no_orders) + " bid id: " + str(self.bid_id) + " ask id: " + str(self.ask_id))
-        #print("current time: " + str(self.current_time) + " ask time: " + str(self.ask_time))
+        # print("no orders: " + str(self.no_orders) + " bid id: " + str(self.bid_id) + " ask id: " + str(self.ask_id))
+        # print("current time: " + str(self.current_time) + " ask time: " + str(self.ask_time))
         if self.no_orders == 0:
             self.bid_price, self.ask_price = self.bid_ask_quote()
             self.bid_id = next(self.order_ids)
             self.ask_id = next(self.order_ids)
-            print("bid id: " + str(self.bid_id) + " bid price: " + str(self.bid_price) + " bid volume: " + str(bid_volume))
+            # print("bid id: " + str(self.bid_id) + " bid price: " + str(self.bid_price) + " bid volume: " + str(bid_volume))
             self.send_insert_order(self.bid_id, Side.BUY, self.bid_price, bid_volume, Lifespan.GOOD_FOR_DAY)
             self.send_insert_order(self.ask_id, Side.ASK, self.ask_price, ask_volume, Lifespan.GOOD_FOR_DAY)
+            self.bids.add(self.bid_id)
+            self.asks.add(self.ask_id)
             self.no_orders += 2
 
         elif self.no_orders == 1:
@@ -178,6 +197,8 @@ class AutoTrader(BaseAutoTrader):
                     self.ask_id = next(self.order_ids)
                     self.send_insert_order(self.bid_id, Side.BUY, self.bid_price, bid_volume, Lifespan.GOOD_FOR_DAY)
                     self.send_insert_order(self.ask_id, Side.ASK, self.ask_price, ask_volume, Lifespan.GOOD_FOR_DAY)
+                    self.bids.add(self.bid_id)
+                    self.asks.add(self.ask_id)
                     self.no_orders += 2
 
             elif self.ask_id != 0:
@@ -188,6 +209,8 @@ class AutoTrader(BaseAutoTrader):
                     self.ask_id = next(self.order_ids)
                     self.send_insert_order(self.bid_id, Side.BUY, self.bid_price, bid_volume, Lifespan.GOOD_FOR_DAY)
                     self.send_insert_order(self.ask_id, Side.ASK, self.ask_price, ask_volume, Lifespan.GOOD_FOR_DAY)
+                    self.bids.add(self.bid_id)
+                    self.asks.add(self.ask_id)
                     self.no_orders += 2
         elif self.no_orders == 2:
             if (self.current_time - self.bid_time) > WAIT_TIME:
@@ -198,6 +221,8 @@ class AutoTrader(BaseAutoTrader):
                 self.ask_id = next(self.order_ids)
                 self.send_insert_order(self.bid_id, Side.BUY, self.bid_price, bid_volume, Lifespan.GOOD_FOR_DAY)
                 self.send_insert_order(self.ask_id, Side.ASK, self.ask_price, ask_volume, Lifespan.GOOD_FOR_DAY)
+                self.bids.add(self.bid_id)
+                self.asks.add(self.ask_id)
                 self.no_orders += 2
 
         # if instrument == Instrument.ETF:
