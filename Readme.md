@@ -1,5 +1,7 @@
 # Ready Trader One
 
+Repository containing our implementations for the 2021 Ready Trader One competition.
+
 ## What is Ready Trader One?
 
 Ready Trader One is a programming competition for University students created
